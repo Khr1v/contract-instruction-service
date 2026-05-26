@@ -61,6 +61,7 @@ class Settings(BaseSettings):
         default=PROJECT_ROOT / "shablon" / "_Шаблон_инструкции_по_работе_с_клиентом_1.docx",
         alias="INSTRUCTION_TEMPLATE_DOCX_PATH",
     )
+    strict_template_renderer: bool = Field(default=True, alias="STRICT_TEMPLATE_RENDERER")
 
     rag_top_k: int = Field(default=5, alias="RAG_TOP_K")
 

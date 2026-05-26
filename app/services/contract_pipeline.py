@@ -243,6 +243,11 @@ class ContractPipeline:
                         / f"{FileStorage.safe_filename(Path(original_filename).stem)}_instruction.docx",
                     )
             except Exception as exc:
+                if self.settings.strict_template_renderer:
+                    raise RuntimeError(
+                        "Template renderer failed and STRICT_TEMPLATE_RENDERER=true. "
+                        "Check INSTRUCTION_RENDERER_PATH and INSTRUCTION_TEMPLATE_DOCX_PATH."
+                    ) from exc
                 warnings.append(f"Template renderer failed, used LLM markdown fallback: {exc}")
                 with tracker.stage("instruction_markdown_generation_fallback"):
                     instruction_markdown = self.instruction_service.generate_instruction(

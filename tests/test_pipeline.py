@@ -16,7 +16,40 @@ class FakeLLM:
         input: str,
         temperature: float | None = None,
         max_output_tokens: int | None = None,
+        model_name: str | None = None,
     ) -> str:
+        if "данные для заполнения Word-шаблона" in instructions:
+            return orjson.dumps(
+                {
+                    "client_name": "ООО Клиент",
+                    "contract_legal_entity": "ООО Клиент",
+                    "generated_date": "01.01.2026",
+                    "work_format": "Спотовые заявки",
+                    "guaranteed_application_rules": ["Уточнить у человека"],
+                    "spot_application_rules": ["Заявки по договоренности"],
+                    "communication_rows": [
+                        {
+                            "full_name": "Уточнить у человека",
+                            "role": "Логистика",
+                            "contacts": "Уточнить у человека",
+                            "responsibility": "Уточнить у человека",
+                        }
+                    ],
+                    "loading_requirements": ["Уточнить у человека"],
+                    "unloading_requirements": ["Уточнить у человека"],
+                    "special_conditions": ["Уточнить у человека"],
+                    "driver_briefing": ["Проверить документы"],
+                    "penalties": ["Пени 0,1%"],
+                    "incident_actions": ["Сообщить логисту"],
+                    "status_informing": {"is_required": "Да", "frequency": "По заявкам", "channels": []},
+                    "payment_document_package": ["Акт", "Счет"],
+                    "document_format_requirements": ["Корректные документы"],
+                    "edo_workflow": "ЭДО Диадок",
+                    "payment_term": "Оплата в течение 10 дней",
+                    "open_questions": ["Уточнить у человека: нет текста всех приложений"],
+                    "extraction_notes": [],
+                }
+            ).decode("utf-8")
         if "Верни только валидный JSON" in instructions:
             return orjson.dumps(
                 {
