@@ -1,0 +1,2 @@
+"""Telegram FSM states placeholder."""
+

@@ -1,0 +1,17 @@
+services:
+  bot:
+    build: .
+    command: python scripts/run_bot.py
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+
+  api:
+    build: .
+    command: python scripts/run_api.py
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+

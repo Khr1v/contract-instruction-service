@@ -1,0 +1,14 @@
+.env
+.DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/
+.idea/
+sdogovory/
+data/uploads/*
+data/processed/*
+data/vectorstore/*
+data/app.db
+!data/uploads/.gitkeep
+!data/processed/.gitkeep
+!data/vectorstore/.gitkeep
