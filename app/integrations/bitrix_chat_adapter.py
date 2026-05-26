@@ -175,49 +175,107 @@ class BitrixChatAdapter:
         message: str | None = None,
     ) -> dict[str, Any]:
         path = Path(file_path)
-        storage_id = await self._resolve_disk_storage_id()
         content = base64.b64encode(path.read_bytes()).decode("ascii")
-        upload = await self.call_method(
-            "disk.storage.uploadfile",
-            {
-                "id": storage_id,
-                "data": {
-                    "NAME": path.name,
-                },
-                "fileContent": [
-                    path.name,
-                    content,
-                ],
-                "generateUniqueName": True,
-            },
-        )
-        file_payload = upload.get("result") if isinstance(upload.get("result"), dict) else {}
-        file_id = file_payload.get("ID") or file_payload.get("id")
-        file_url = (
-            file_payload.get("DETAIL_URL")
-            or file_payload.get("detailUrl")
-            or file_payload.get("DOWNLOAD_URL")
-            or file_payload.get("downloadUrl")
-        )
-        absolute_url = self._absolute_portal_url(str(file_url)) if file_url else None
-        if not file_id:
-            raise BitrixAPIError("Bitrix disk upload result does not contain file ID")
+        try:
+            folder_id = await self._resolve_chat_file_folder_id(dialog_id)
+            file_payload = await self._upload_file_to_folder(folder_id, path.name, content)
+            upload_target = {"chat_folder_id": folder_id}
+        except BitrixAPIError as exc:
+            logger.info("Bitrix chat folder upload failed, trying user disk storage upload: %s", exc)
+            storage_id = await self._resolve_disk_storage_id()
+            file_payload = await self._upload_file_to_storage(storage_id, path.name, content)
+            upload_target = {"storage_id": storage_id}
+
+        file_id = self._extract_disk_file_id(file_payload)
+        absolute_url = self._extract_disk_file_url(file_payload)
 
         try:
             commit = await self.call_method(
                 "im.disk.file.commit",
                 {
                     "DIALOG_ID": dialog_id,
-                    "FILE_ID": int(file_id),
+                    "FILE_ID": [int(file_id)],
                     "MESSAGE": message or "",
                 },
             )
-            return {"result": {"disk_file": file_payload, "chat_commit": commit.get("result")}}
+            return {
+                "result": {
+                    "disk_file": file_payload,
+                    "chat_commit": commit.get("result"),
+                    **upload_target,
+                }
+            }
         except BitrixAPIError as exc:
             logger.info("Bitrix im.disk.file.commit failed, sending disk file link instead: %s", exc)
             link_text = absolute_url or f"Файл загружен в Bitrix Disk, file ID: {file_id}"
             await self.send_message(dialog_id, f"{message or 'Инструкция готова.'}\n\nDOCX: {link_text}")
-            return {"result": {"disk_file": file_payload, "link_sent": link_text}}
+            return {"result": {"disk_file": file_payload, "link_sent": link_text, **upload_target}}
+
+    async def _resolve_chat_file_folder_id(self, dialog_id: str) -> int:
+        data = await self.call_method("im.disk.folder.get", {"DIALOG_ID": dialog_id})
+        result = data.get("result")
+        if isinstance(result, dict):
+            folder_id = result.get("ID") or result.get("id")
+        else:
+            folder_id = result
+        if not folder_id:
+            raise BitrixAPIError("Bitrix chat disk folder ID is missing")
+        return int(folder_id)
+
+    async def _upload_file_to_folder(self, folder_id: int, filename: str, content_base64: str) -> dict[str, Any]:
+        upload = await self.call_method(
+            "disk.folder.uploadfile",
+            {
+                "id": folder_id,
+                "data": {
+                    "NAME": filename,
+                },
+                "fileContent": [
+                    filename,
+                    content_base64,
+                ],
+                "generateUniqueName": True,
+            },
+        )
+        result = upload.get("result")
+        if not isinstance(result, dict):
+            raise BitrixAPIError("Bitrix folder upload returned empty result")
+        return result
+
+    async def _upload_file_to_storage(self, storage_id: int, filename: str, content_base64: str) -> dict[str, Any]:
+        upload = await self.call_method(
+            "disk.storage.uploadfile",
+            {
+                "id": storage_id,
+                "data": {
+                    "NAME": filename,
+                },
+                "fileContent": [
+                    filename,
+                    content_base64,
+                ],
+                "generateUniqueName": True,
+            },
+        )
+        result = upload.get("result")
+        if not isinstance(result, dict):
+            raise BitrixAPIError("Bitrix storage upload returned empty result")
+        return result
+
+    def _extract_disk_file_id(self, file_payload: dict[str, Any]) -> int:
+        file_id = file_payload.get("ID") or file_payload.get("id")
+        if not file_id:
+            raise BitrixAPIError("Bitrix disk upload result does not contain file ID")
+        return int(file_id)
+
+    def _extract_disk_file_url(self, file_payload: dict[str, Any]) -> str | None:
+        file_url = (
+            file_payload.get("DETAIL_URL")
+            or file_payload.get("detailUrl")
+            or file_payload.get("DOWNLOAD_URL")
+            or file_payload.get("downloadUrl")
+        )
+        return self._absolute_portal_url(str(file_url)) if file_url else None
 
     async def _resolve_disk_storage_id(self) -> int:
         if self.settings.bitrix_disk_storage_id is not None:

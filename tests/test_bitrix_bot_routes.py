@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from app.api.bitrix_bot_routes import _extract_dialog_id, _extract_files, _get_str, _insert_nested_form_value
 from app.config import Settings
 from app.integrations.bitrix_chat_adapter import BitrixChatAdapter
@@ -62,3 +66,49 @@ def test_bitrix_adapter_builds_absolute_portal_url() -> None:
     assert adapter._absolute_portal_url("/company/personal/user/1763/disk/file/1/") == (
         "https://b24.example.ru/company/personal/user/1763/disk/file/1/"
     )
+
+
+class FakeBitrixChatAdapter(BitrixChatAdapter):
+    def __init__(self) -> None:
+        super().__init__(
+            Settings(
+                BITRIX_WEBHOOK_URL="https://b24.example.ru/rest/1763/token",
+                BITRIX_BOT_ID=1812,
+                BITRIX_BOT_TOKEN="client",
+            )
+        )
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    async def call_method(self, method: str, payload: dict[str, object]) -> dict[str, object]:
+        self.calls.append((method, payload))
+        if method == "im.disk.folder.get":
+            return {"result": {"ID": 5153}}
+        if method == "disk.folder.uploadfile":
+            return {
+                "result": {
+                    "ID": 777,
+                    "DETAIL_URL": "/company/personal/user/1763/disk/file/777/",
+                }
+            }
+        if method == "im.disk.file.commit":
+            return {"result": {"MESSAGE_ID": 888}}
+        raise AssertionError(f"Unexpected method: {method}")
+
+
+@pytest.mark.asyncio
+async def test_upload_file_via_disk_attaches_to_chat_folder(tmp_path: Path) -> None:
+    file_path = tmp_path / "instruction.docx"
+    file_path.write_bytes(b"docx")
+    adapter = FakeBitrixChatAdapter()
+
+    result = await adapter.upload_file_via_disk("1763", file_path, "Готово")
+
+    assert [method for method, _ in adapter.calls] == [
+        "im.disk.folder.get",
+        "disk.folder.uploadfile",
+        "im.disk.file.commit",
+    ]
+    assert adapter.calls[0][1] == {"DIALOG_ID": "1763"}
+    assert adapter.calls[1][1]["id"] == 5153
+    assert adapter.calls[2][1]["FILE_ID"] == [777]
+    assert result["result"]["chat_folder_id"] == 5153
