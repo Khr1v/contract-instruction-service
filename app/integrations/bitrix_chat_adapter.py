@@ -4,6 +4,7 @@ import base64
 import logging
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -155,13 +156,103 @@ class BitrixChatAdapter:
             )
         except BitrixAPIError as exc:
             logger.info("Bitrix v2 bot file upload failed, trying im.v2.File.upload: %s", exc)
-            return await self.call_method(
-                "im.v2.File.upload",
+            try:
+                return await self.call_method(
+                    "im.v2.File.upload",
+                    {
+                        "dialogId": dialog_id,
+                        "fields": fields,
+                    },
+                )
+            except BitrixAPIError as legacy_exc:
+                logger.info("Bitrix im.v2 file upload failed, trying disk upload + chat commit: %s", legacy_exc)
+                return await self.upload_file_via_disk(dialog_id, path, message)
+
+    async def upload_file_via_disk(
+        self,
+        dialog_id: str,
+        file_path: str | Path,
+        message: str | None = None,
+    ) -> dict[str, Any]:
+        path = Path(file_path)
+        storage_id = await self._resolve_disk_storage_id()
+        content = base64.b64encode(path.read_bytes()).decode("ascii")
+        upload = await self.call_method(
+            "disk.storage.uploadfile",
+            {
+                "id": storage_id,
+                "data": {
+                    "NAME": path.name,
+                },
+                "fileContent": [
+                    path.name,
+                    content,
+                ],
+                "generateUniqueName": True,
+            },
+        )
+        file_payload = upload.get("result") if isinstance(upload.get("result"), dict) else {}
+        file_id = file_payload.get("ID") or file_payload.get("id")
+        file_url = (
+            file_payload.get("DETAIL_URL")
+            or file_payload.get("detailUrl")
+            or file_payload.get("DOWNLOAD_URL")
+            or file_payload.get("downloadUrl")
+        )
+        absolute_url = self._absolute_portal_url(str(file_url)) if file_url else None
+        if not file_id:
+            raise BitrixAPIError("Bitrix disk upload result does not contain file ID")
+
+        try:
+            commit = await self.call_method(
+                "im.disk.file.commit",
                 {
-                    "dialogId": dialog_id,
-                    "fields": fields,
+                    "DIALOG_ID": dialog_id,
+                    "FILE_ID": int(file_id),
+                    "MESSAGE": message or "",
                 },
             )
+            return {"result": {"disk_file": file_payload, "chat_commit": commit.get("result")}}
+        except BitrixAPIError as exc:
+            logger.info("Bitrix im.disk.file.commit failed, sending disk file link instead: %s", exc)
+            link_text = absolute_url or f"Файл загружен в Bitrix Disk, file ID: {file_id}"
+            await self.send_message(dialog_id, f"{message or 'Инструкция готова.'}\n\nDOCX: {link_text}")
+            return {"result": {"disk_file": file_payload, "link_sent": link_text}}
+
+    async def _resolve_disk_storage_id(self) -> int:
+        if self.settings.bitrix_disk_storage_id is not None:
+            return self.settings.bitrix_disk_storage_id
+        data = await self.call_method("disk.storage.getlist", {})
+        result = data.get("result")
+        if not isinstance(result, list) or not result:
+            raise BitrixAPIError("Bitrix disk storage list is empty")
+
+        rest_user_id = self._rest_user_id()
+        if rest_user_id:
+            for storage in result:
+                if not isinstance(storage, dict):
+                    continue
+                entity_type = str(storage.get("ENTITY_TYPE") or storage.get("entityType") or "").lower()
+                entity_id = str(storage.get("ENTITY_ID") or storage.get("entityId") or "")
+                if entity_type == "user" and entity_id == rest_user_id:
+                    return int(storage["ID"] if "ID" in storage else storage["id"])
+
+        for storage in result:
+            if isinstance(storage, dict) and (storage.get("ID") or storage.get("id")):
+                return int(storage["ID"] if "ID" in storage else storage["id"])
+        raise BitrixAPIError("Could not resolve Bitrix disk storage ID")
+
+    def _rest_user_id(self) -> str | None:
+        parts = [part for part in urlsplit(self._rest_base_url).path.split("/") if part]
+        if len(parts) >= 2 and parts[0] == "rest":
+            return parts[1]
+        return None
+
+    def _absolute_portal_url(self, url: str) -> str:
+        if url.startswith("http://") or url.startswith("https://"):
+            return url
+        parsed = urlsplit(self._rest_base_url)
+        return f"{parsed.scheme}://{parsed.netloc}/{url.lstrip('/')}"
 
     async def send_instruction_result(self, dialog_id: str, result: ProcessingResult) -> None:
         summary = format_processing_result_message(result)

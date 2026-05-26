@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from app.api.bitrix_bot_routes import _extract_dialog_id, _extract_files, _get_str, _insert_nested_form_value
+from app.config import Settings
+from app.integrations.bitrix_chat_adapter import BitrixChatAdapter
 
 
 def test_bitrix_form_payload_extracts_chat_file() -> None:
@@ -45,3 +47,18 @@ def test_legacy_bitrix_payload_extracts_dialog_and_message() -> None:
     assert _extract_dialog_id(params, {}) == "1812"
     assert _get_str(params, "message") == "/help"
     assert _get_str(params, "messageId") == "42"
+
+
+def test_bitrix_adapter_builds_absolute_portal_url() -> None:
+    adapter = BitrixChatAdapter(
+        Settings(
+            BITRIX_WEBHOOK_URL="https://b24.example.ru/rest/1763/token",
+            BITRIX_BOT_ID=1812,
+            BITRIX_BOT_TOKEN="client",
+        )
+    )
+
+    assert adapter._rest_user_id() == "1763"
+    assert adapter._absolute_portal_url("/company/personal/user/1763/disk/file/1/") == (
+        "https://b24.example.ru/company/personal/user/1763/disk/file/1/"
+    )
