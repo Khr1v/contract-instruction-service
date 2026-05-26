@@ -43,20 +43,39 @@ async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
     data = _get_dict(payload, "data")
     if not data:
         data = payload
-    if event and event not in {"ONIMBOTV2MESSAGEADD", "ONIMBOTV2JOINCHAT", "ONIMBOTV2COMMANDADD"}:
+    supported_events = {
+        "ONIMBOTV2MESSAGEADD",
+        "ONIMBOTV2JOINCHAT",
+        "ONIMBOTV2COMMANDADD",
+        "ONIMBOTMESSAGEADD",
+        "ONIMBOTJOINCHAT",
+        "ONIMBOTCOMMANDADD",
+    }
+    if event and event not in supported_events:
         logger.debug("Ignored Bitrix bot event=%s", event)
         return
 
-    message = _get_dict(data, "message")
+    message = _get_dict(data, "message") or _get_dict(data, "params")
     chat = _get_dict(data, "chat")
     user = _get_dict(data, "user")
     dialog_id = _extract_dialog_id(message, chat)
     if not dialog_id:
-        logger.warning("Bitrix bot event has no dialog_id payload_keys=%s", sorted(payload.keys()))
+        logger.warning(
+            "Bitrix bot event has no dialog_id event=%s payload_keys=%s data_keys=%s",
+            event,
+            sorted(payload.keys()),
+            sorted(data.keys()),
+        )
         return
 
-    text = (_get_str(message, "text") or "").strip()
-    if event == "ONIMBOTV2JOINCHAT" or text.lower() in {"/start", "/help", "help"}:
+    text = (_get_str(message, "text") or _get_str(message, "message") or "").strip()
+    logger.info(
+        "Bitrix bot event received event=%s dialog_id=%s text_present=%s",
+        event,
+        dialog_id,
+        bool(text),
+    )
+    if event in {"ONIMBOTV2JOINCHAT", "ONIMBOTJOINCHAT"} or text.lower() in {"/start", "/help", "help"}:
         await adapter.send_message(
             dialog_id,
             "Отправьте PDF или DOCX договор в этот чат. Я обработаю файл через ContractPipeline "
@@ -66,6 +85,7 @@ async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
         return
 
     files = _extract_files(message)
+    logger.info("Bitrix bot files detected event=%s dialog_id=%s file_count=%s", event, dialog_id, len(files))
     supported_file = next((file for file in files if is_supported_document(_extract_filename(file))), None)
     if supported_file is None and files:
         supported_file = files[0]
@@ -81,7 +101,12 @@ async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
         await adapter.send_error(dialog_id, "Не удалось получить fileId из события Bitrix.")
         return
 
-    external_user_id = _get_str(user, "id") or _get_str(message, "authorId") or "bitrix-user"
+    external_user_id = (
+        _get_str(user, "id")
+        or _get_str(message, "authorId")
+        or _get_str(message, "fromUserId")
+        or "bitrix-user"
+    )
     await adapter.send_processing_status(dialog_id, f"Файл получен: {filename}\nСкачиваю из Bitrix24.")
 
     with tempfile.TemporaryDirectory(prefix="bitrix_contract_") as tmp_dir:
@@ -127,6 +152,9 @@ async def _read_event_payload(request: Request) -> dict[str, Any]:
     for raw_key, values in parsed.items():
         value: Any = values[-1] if values else ""
         _insert_nested_form_value(result, raw_key, value)
+    for raw_key, value in request.query_params.multi_items():
+        if raw_key not in result:
+            _insert_nested_form_value(result, raw_key, value)
     return result
 
 
@@ -169,8 +197,13 @@ def _split_form_key(key: str) -> list[str]:
 
 def _extract_message_id(payload: dict[str, Any]) -> str | None:
     data = _get_dict(payload, "data") or payload
-    message = _get_dict(data, "message")
-    message_id = _get_str(message, "id") or _get_str(message, "uuid") or _get_str(data, "eventId")
+    message = _get_dict(data, "message") or _get_dict(data, "params")
+    message_id = (
+        _get_str(message, "id")
+        or _get_str(message, "uuid")
+        or _get_str(message, "messageId")
+        or _get_str(data, "eventId")
+    )
     event_name = _get_str(payload, "event") or ""
     if message_id:
         return f"{event_name}:{message_id}"
@@ -181,7 +214,7 @@ def _extract_dialog_id(message: dict[str, Any], chat: dict[str, Any]) -> str | N
     dialog_id = _get_str(chat, "dialogId") or _get_str(message, "dialogId")
     if dialog_id:
         return dialog_id
-    chat_id = _get_str(chat, "id") or _get_str(message, "chatId")
+    chat_id = _get_str(chat, "id") or _get_str(message, "chatId") or _get_str(message, "toChatId")
     if chat_id:
         return f"chat{chat_id}"
     return None
@@ -203,6 +236,8 @@ def _extract_files(message: dict[str, Any]) -> list[dict[str, Any]]:
             params.get("fileId"),
             params.get("FILE_ID"),
             params.get("diskFileId"),
+            message.get("FILE_ID"),
+            message.get("DISK_FILE_ID"),
         ]
     )
     files: list[dict[str, Any]] = []
@@ -277,20 +312,32 @@ def _ensure_supported_download_name(local_path: Path, filename: str) -> tuple[Pa
 
 
 def _get_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:
-    value = payload.get(key)
-    if isinstance(value, dict):
-        return value
-    upper_value = payload.get(key.upper())
-    if isinstance(upper_value, dict):
-        return upper_value
+    for variant in _key_variants(key):
+        value = payload.get(variant)
+        if isinstance(value, dict):
+            return value
     return {}
 
 
 def _get_str(payload: dict[str, Any], key: str) -> str | None:
-    value = payload.get(key)
-    if value is None:
-        value = payload.get(key.upper())
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
+    for variant in _key_variants(key):
+        value = payload.get(variant)
+        if value is not None:
+            text = str(value).strip()
+            return text or None
+    return None
+
+
+def _key_variants(key: str) -> list[str]:
+    variants = [key, key.upper()]
+    snake = ""
+    for index, char in enumerate(key):
+        if char.isupper() and index > 0:
+            snake += "_"
+        snake += char.upper()
+    if snake not in variants:
+        variants.append(snake)
+    lower = key.lower()
+    if lower not in variants:
+        variants.append(lower)
+    return variants

@@ -81,30 +81,50 @@ class BitrixChatAdapter:
         await self.send_message(dialog_id, status)
 
     async def send_message(self, dialog_id: str, message: str) -> None:
-        await self.call_method(
-            "imbot.v2.Chat.Message.send",
-            {
-                "botId": self._bot_id,
-                "botToken": self._bot_token,
-                "dialogId": dialog_id,
-                "fields": {
-                    "message": message[:19_500],
-                    "urlPreview": False,
+        try:
+            await self.call_method(
+                "imbot.v2.Chat.Message.send",
+                {
+                    "botId": self._bot_id,
+                    "botToken": self._bot_token,
+                    "dialogId": dialog_id,
+                    "fields": {
+                        "message": message[:19_500],
+                        "urlPreview": False,
+                    },
                 },
-            },
-        )
+            )
+        except BitrixAPIError as exc:
+            logger.info("Bitrix v2 message send failed, trying legacy imbot.message.add: %s", exc)
+            await self.call_method(
+                "imbot.message.add",
+                {
+                    "BOT_ID": self._bot_id,
+                    "CLIENT_ID": self._bot_token,
+                    "DIALOG_ID": dialog_id,
+                    "MESSAGE": message[:19_500],
+                    "SYSTEM": "N",
+                    "URL_PREVIEW": "N",
+                },
+            )
 
     async def download_file(self, file_id: str | int, target_path: Path) -> Path:
-        data = await self.call_method(
-            "imbot.v2.File.download",
-            {
-                "botId": self._bot_id,
-                "botToken": self._bot_token,
-                "fileId": int(file_id),
-            },
-        )
-        result = data.get("result") if isinstance(data.get("result"), dict) else {}
-        download_url = result.get("downloadUrl")
+        try:
+            data = await self.call_method(
+                "imbot.v2.File.download",
+                {
+                    "botId": self._bot_id,
+                    "botToken": self._bot_token,
+                    "fileId": int(file_id),
+                },
+            )
+            result = data.get("result") if isinstance(data.get("result"), dict) else {}
+            download_url = result.get("downloadUrl")
+        except BitrixAPIError as exc:
+            logger.info("Bitrix v2 file download failed, trying disk.file.get: %s", exc)
+            data = await self.call_method("disk.file.get", {"id": int(file_id)})
+            result = data.get("result") if isinstance(data.get("result"), dict) else {}
+            download_url = result.get("DOWNLOAD_URL") or result.get("downloadUrl")
         if not download_url:
             raise BitrixAPIError("Bitrix file download URL is missing")
 
@@ -118,19 +138,30 @@ class BitrixChatAdapter:
     async def upload_file(self, dialog_id: str, file_path: str | Path, message: str | None = None) -> dict[str, Any]:
         path = Path(file_path)
         content = base64.b64encode(path.read_bytes()).decode("ascii")
-        return await self.call_method(
-            "imbot.v2.File.upload",
-            {
-                "botId": self._bot_id,
-                "botToken": self._bot_token,
-                "dialogId": dialog_id,
-                "fields": {
-                    "name": path.name,
-                    "content": content,
-                    "message": message or "",
+        fields = {
+            "name": path.name,
+            "content": content,
+            "message": message or "",
+        }
+        try:
+            return await self.call_method(
+                "imbot.v2.File.upload",
+                {
+                    "botId": self._bot_id,
+                    "botToken": self._bot_token,
+                    "dialogId": dialog_id,
+                    "fields": fields,
                 },
-            },
-        )
+            )
+        except BitrixAPIError as exc:
+            logger.info("Bitrix v2 bot file upload failed, trying im.v2.File.upload: %s", exc)
+            return await self.call_method(
+                "im.v2.File.upload",
+                {
+                    "dialogId": dialog_id,
+                    "fields": fields,
+                },
+            )
 
     async def send_instruction_result(self, dialog_id: str, result: ProcessingResult) -> None:
         summary = format_processing_result_message(result)
@@ -139,7 +170,15 @@ class BitrixChatAdapter:
             return
 
         if result.instruction_docx_path and Path(result.instruction_docx_path).exists():
-            await self.upload_file(dialog_id, result.instruction_docx_path, summary)
+            try:
+                await self.upload_file(dialog_id, result.instruction_docx_path, summary)
+            except BitrixAPIError as exc:
+                logger.exception("Could not upload instruction DOCX to Bitrix")
+                await self.send_message(
+                    dialog_id,
+                    f"{summary}\n\nНе удалось прикрепить DOCX в чат: {exc}\n"
+                    f"Файл сохранен на сервере: {result.instruction_docx_path}",
+                )
             return
 
         await self.send_message(dialog_id, summary)
