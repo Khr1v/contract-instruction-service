@@ -174,6 +174,8 @@ Endpoints:
 - `GET /api/health`
 - `POST /api/reindex-templates`
 - `POST /api/bitrix/webhook/document`
+- `GET /api/bitrix/bot/health`
+- `POST /api/bitrix/bot/events`
 
 Bitrix webhook payload:
 
@@ -187,6 +189,47 @@ Bitrix webhook payload:
   "metadata": {}
 }
 ```
+
+## Bitrix24 Chat Bot
+
+Для теста в общем чате используется отдельный chat-bot adapter. Это не CRM-сделка и не Telegram: пользователь добавляет бота в чат, отправляет PDF/DOCX файлом, backend скачивает файл через Bitrix REST, запускает `ContractPipeline` и возвращает готовую инструкцию `.docx` обратно в чат.
+
+Нужные права webhook/local app в Bitrix24:
+- `imbot` — регистрация chat-bot, прием событий, отправка сообщений и файлов;
+- желательно `im`/`disk`, если портал потребует расширенный доступ к файлам.
+
+Переменные `.env`:
+
+```env
+PUBLIC_BASE_URL=https://your-domain.example.com
+BITRIX_WEBHOOK_URL=https://your-portal.bitrix24.ru/rest/<user_id>/<webhook_token>
+BITRIX_BOT_TOKEN=<random-secret-token>
+BITRIX_BOT_ID=
+BITRIX_BOT_CODE=contract_instruction_bot
+BITRIX_BOT_NAME=ИИ Инструкции
+BITRIX_BOT_EVENT_URL=
+```
+
+`PUBLIC_BASE_URL` должен быть публичным HTTPS-адресом FastAPI. Если endpoint отличается, укажите полный URL в `BITRIX_BOT_EVENT_URL`, например:
+
+```env
+BITRIX_BOT_EVENT_URL=https://your-domain.example.com/api/bitrix/bot/events
+```
+
+Регистрация бота:
+
+```bash
+python scripts/register_bitrix_bot.py
+```
+
+Скрипт выведет `BITRIX_BOT_ID=...`. Это значение нужно записать в `.env` и перезапустить API.
+
+После этого:
+- добавьте бота в общий чат Bitrix24;
+- отправьте в чат PDF или DOCX договор;
+- бот вернет отчет обработки и `.docx` с инструкцией.
+
+Для chat-bot используются официальные методы Bitrix24 `imbot.v2.Bot.register`, `imbot.v2.File.download`, `imbot.v2.Chat.Message.send` и `imbot.v2.File.upload`. Core pipeline от Bitrix не зависит.
 
 ## Docker
 

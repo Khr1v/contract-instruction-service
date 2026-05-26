@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -68,6 +68,22 @@ class Settings(BaseSettings):
 
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")
+
+    public_base_url: str | None = Field(default=None, alias="PUBLIC_BASE_URL")
+    bitrix_webhook_url: str | None = Field(default=None, alias="BITRIX_WEBHOOK_URL")
+    bitrix_bot_id: int | None = Field(default=None, alias="BITRIX_BOT_ID")
+    bitrix_bot_code: str = Field(default="contract_instruction_bot", alias="BITRIX_BOT_CODE")
+    bitrix_bot_name: str = Field(default="ИИ Инструкции", alias="BITRIX_BOT_NAME")
+    bitrix_bot_token: str | None = Field(default=None, alias="BITRIX_BOT_TOKEN")
+    bitrix_bot_type: str = Field(default="bot", alias="BITRIX_BOT_TYPE")
+    bitrix_bot_event_url: str | None = Field(default=None, alias="BITRIX_BOT_EVENT_URL")
+
+    @field_validator("bitrix_bot_id", mode="before")
+    @classmethod
+    def empty_bitrix_bot_id_to_none(cls, value: object) -> object:
+        if value == "":
+            return None
+        return value
 
     def model_post_init(self, __context: object) -> None:
         for field_name in [
