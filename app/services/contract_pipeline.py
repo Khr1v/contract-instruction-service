@@ -167,7 +167,7 @@ class ContractPipeline:
             )
 
             with tracker.stage("document_extraction"):
-                canonical_document = routing.extractor.extract(
+                canonical_document = self.router.extract(
                     stored_path,
                     source_file_id=document_id,
                     filename=original_filename,

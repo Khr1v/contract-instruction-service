@@ -79,7 +79,7 @@ async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
     if event in {"ONIMBOTV2JOINCHAT", "ONIMBOTJOINCHAT"} or text.lower() in {"/start", "/help", "help"}:
         await adapter.send_message(
             dialog_id,
-            "Отправьте PDF или DOCX договор в этот чат. Я обработаю файл через ContractPipeline "
+            "Отправьте PDF, DOCX или DOC договор в этот чат. Я обработаю файл через ContractPipeline "
             "и верну готовую инструкцию DOCX. Если данных не хватит, инструкция будет помечена "
             "как требующая проверки человеком.",
         )
@@ -93,14 +93,15 @@ async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
             names = ", ".join(_extract_filename(file) for file in files[:3])
             await adapter.send_message(
                 dialog_id,
-                "Формат файла не поддерживается. Пришлите договор в PDF или DOCX.\n"
+                "Формат файла не поддерживается. Пришлите договор в PDF, DOCX или DOC.\n"
                 f"Получено: {names}\n"
-                "Если это старый Word .doc, откройте его в Word/LibreOffice и сохраните как .docx или PDF.",
+                "Если это старый Word .doc, попробуйте отправить файл еще раз после обновления сервера: "
+                "бот конвертирует .doc через LibreOffice.",
             )
             return
         if not text:
             return
-        await adapter.send_message(dialog_id, "Пришлите договор файлом в формате PDF или DOCX.")
+        await adapter.send_message(dialog_id, "Пришлите договор файлом в формате PDF, DOCX или DOC.")
         return
 
     file_id = _extract_file_id(supported_file)
@@ -346,6 +347,8 @@ def _ensure_supported_download_name(local_path: Path, filename: str) -> tuple[Pa
         suffix = ".pdf"
     elif signature.startswith(b"PK\x03\x04"):
         suffix = ".docx"
+    elif signature.startswith(b"\xd0\xcf\x11\xe0"):
+        suffix = ".doc"
     if suffix is None:
         raise ValueError("Поддерживаются только PDF и DOCX.")
     new_filename = f"{local_path.stem}{suffix}"

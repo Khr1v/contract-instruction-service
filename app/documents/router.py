@@ -6,6 +6,7 @@ from pathlib import Path
 import fitz
 
 from app.documents.base import DocumentExtractor
+from app.documents.doc_converter import LegacyDocConverter
 from app.documents.docx_extractor import DOCXExtractor
 from app.documents.pdf_mixed_extractor import PDFMixedExtractor
 from app.documents.pdf_ocr_extractor import PDFOCRExtractor
@@ -27,9 +28,11 @@ class DocumentRouter:
         pdf_text_extractor: PDFTextExtractor | None = None,
         pdf_ocr_extractor: PDFOCRExtractor | None = None,
         pdf_mixed_extractor: PDFMixedExtractor | None = None,
+        legacy_doc_converter: LegacyDocConverter | None = None,
         min_text_chars_per_page: int = 100,
     ) -> None:
         self.docx_extractor = docx_extractor or DOCXExtractor()
+        self.legacy_doc_converter = legacy_doc_converter or LegacyDocConverter()
         self.pdf_text_extractor = pdf_text_extractor or PDFTextExtractor()
         self.pdf_ocr_extractor = pdf_ocr_extractor or PDFOCRExtractor()
         self.pdf_mixed_extractor = pdf_mixed_extractor or PDFMixedExtractor(
@@ -40,8 +43,8 @@ class DocumentRouter:
     def route(self, file_path: str | Path) -> RoutingResult:
         path = Path(file_path)
         suffix = path.suffix.lower()
-        if suffix == ".docx":
-            return RoutingResult(SourceFormat.DOCX, self.docx_extractor, "DOCX extension")
+        if suffix in {".docx", ".doc"}:
+            return RoutingResult(SourceFormat.DOCX, self.docx_extractor, f"{suffix.upper().lstrip('.')} extension")
         if suffix != ".pdf":
             return RoutingResult(SourceFormat.UNSUPPORTED, None, f"Unsupported extension: {suffix}")
 
@@ -66,7 +69,9 @@ class DocumentRouter:
         result = self.route(file_path)
         if result.extractor is None:
             raise ValueError(result.reason)
-        return result.extractor.extract(file_path, source_file_id=source_file_id, filename=filename)
+        path = self.legacy_doc_converter.convert_doc_to_docx(file_path)
+        extraction_filename = Path(filename).with_suffix(".docx").name if Path(filename).suffix.lower() == ".doc" else filename
+        return result.extractor.extract(path, source_file_id=source_file_id, filename=extraction_filename)
 
     def _pdf_page_text_lengths(self, path: Path) -> list[int]:
         lengths: list[int] = []

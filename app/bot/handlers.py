@@ -19,7 +19,7 @@ telegram_adapter = TelegramTestAdapter(pipeline)
 async def start(message: Message) -> None:
     await message.answer(
         "Тестовый Telegram-интерфейс для обработки договоров. "
-        "Отправьте PDF или DOCX договор. Бизнес-логика находится в backend pipeline, не в боте."
+        "Отправьте PDF, DOCX или DOC договор. Бизнес-логика находится в backend pipeline, не в боте."
     )
 
 
@@ -30,7 +30,7 @@ async def help_command(message: Message) -> None:
         "/start — описание тестового интерфейса\n"
         "/status — статус сервиса\n"
         "/reindex_templates — переиндексировать RAG, только ADMIN_IDS\n\n"
-        "Поддерживаются файлы .pdf и .docx."
+        "Поддерживаются файлы .pdf, .docx и .doc."
     )
 
 
@@ -56,7 +56,7 @@ async def reindex_templates(message: Message) -> None:
 @router.message()
 async def handle_document(message: Message, bot: Bot) -> None:
     if message.document is None:
-        await message.answer("Отправьте PDF или DOCX договор файлом.")
+        await message.answer("Отправьте PDF, DOCX или DOC договор файлом.")
         return
     filename = message.document.file_name or "document"
     if not is_supported_document(filename):
