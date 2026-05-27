@@ -79,8 +79,9 @@ class Settings(BaseSettings):
     bitrix_bot_type: str = Field(default="bot", alias="BITRIX_BOT_TYPE")
     bitrix_bot_event_url: str | None = Field(default=None, alias="BITRIX_BOT_EVENT_URL")
     bitrix_disk_storage_id: int | None = Field(default=None, alias="BITRIX_DISK_STORAGE_ID")
+    bitrix_result_folder_id: int | None = Field(default=None, alias="BITRIX_RESULT_FOLDER_ID")
 
-    @field_validator("bitrix_bot_id", "bitrix_disk_storage_id", mode="before")
+    @field_validator("bitrix_bot_id", "bitrix_disk_storage_id", "bitrix_result_folder_id", mode="before")
     @classmethod
     def empty_int_setting_to_none(cls, value: object) -> object:
         if value == "":

@@ -137,14 +137,14 @@ class FakeBitrixChatAdapter(BitrixChatAdapter):
         raise AssertionError(f"Unexpected method: {method}")
 
 
-class FakeMessageOnlyBitrixChatAdapter(BitrixChatAdapter):
-    def __init__(self, public_base_url: str) -> None:
+class FakeResultFolderBitrixChatAdapter(BitrixChatAdapter):
+    def __init__(self) -> None:
         super().__init__(
             Settings(
                 BITRIX_WEBHOOK_URL="https://b24.example.ru/rest/1763/token",
                 BITRIX_BOT_ID=1812,
                 BITRIX_BOT_TOKEN="client",
-                PUBLIC_BASE_URL=public_base_url,
+                BITRIX_RESULT_FOLDER_ID=900,
             )
         )
         self.calls: list[tuple[str, dict[str, object]]] = []
@@ -155,6 +155,13 @@ class FakeMessageOnlyBitrixChatAdapter(BitrixChatAdapter):
             raise BitrixAPIError("v2 is not available in boxed test")
         if method == "imbot.message.add":
             return {"result": 123}
+        if method == "disk.folder.uploadfile":
+            return {
+                "result": {
+                    "ID": 778,
+                    "DETAIL_URL": "/docs/path/instruction.docx",
+                }
+            }
         raise AssertionError(f"Unexpected method: {method}")
 
 
@@ -178,10 +185,10 @@ async def test_upload_file_via_disk_attaches_to_chat_folder(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_send_instruction_result_uses_backend_download_link(tmp_path: Path) -> None:
+async def test_send_instruction_result_uses_result_folder_link(tmp_path: Path) -> None:
     file_path = tmp_path / "instruction.docx"
     file_path.write_bytes(b"docx")
-    adapter = FakeMessageOnlyBitrixChatAdapter("http://158.160.250.222:8000")
+    adapter = FakeResultFolderBitrixChatAdapter()
 
     await adapter.send_instruction_result(
         "1504",
@@ -193,6 +200,11 @@ async def test_send_instruction_result_uses_backend_download_link(tmp_path: Path
         ),
     )
 
-    assert [method for method, _ in adapter.calls] == ["imbot.v2.Chat.Message.send", "imbot.message.add"]
-    message = str(adapter.calls[1][1]["MESSAGE"])
-    assert "Скачать DOCX: http://158.160.250.222:8000/api/bitrix/bot/download/doc-1/instruction.docx" in message
+    assert [method for method, _ in adapter.calls] == [
+        "disk.folder.uploadfile",
+        "imbot.v2.Chat.Message.send",
+        "imbot.message.add",
+    ]
+    assert adapter.calls[0][1]["id"] == 900
+    message = str(adapter.calls[2][1]["MESSAGE"])
+    assert "DOCX в общей папке: https://b24.example.ru/docs/path/instruction.docx" in message
