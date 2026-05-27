@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi.responses import FileResponse
 
 from app.config import get_settings
 from app.integrations.bitrix_chat_adapter import BitrixAPIError, BitrixChatAdapter
@@ -24,6 +27,22 @@ _processed_message_ids: set[str] = set()
 @router.get("/health")
 async def bitrix_bot_health() -> dict[str, str]:
     return {"status": "ok", "adapter": "bitrix_chat_bot"}
+
+
+@router.get("/download/{document_id}/{filename}")
+async def download_processed_file(document_id: str, filename: str, token: str) -> FileResponse:
+    if not _is_valid_download_token(document_id, filename, token):
+        raise HTTPException(status_code=403, detail="Invalid download token")
+    settings = get_settings()
+    path = (settings.processed_dir / document_id / filename).resolve()
+    processed_root = settings.processed_dir.resolve()
+    if processed_root not in path.parents or not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(
+        path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
 
 @router.post("/events")
@@ -162,6 +181,25 @@ def _build_bitrix_file_adapter(payload: dict[str, Any]) -> BitrixChatAdapter:
                 access_token=access_token,
             )
     return BitrixChatAdapter()
+
+
+def _is_valid_download_token(document_id: str, filename: str, token: str) -> bool:
+    expected = _build_download_token(document_id, filename)
+    return hmac.compare_digest(expected, token)
+
+
+def _build_download_token(document_id: str, filename: str) -> str:
+    secret = _download_secret()
+    payload = f"{document_id}:{filename}".encode("utf-8")
+    return hmac.new(secret, payload, hashlib.sha256).hexdigest()
+
+
+def _download_secret() -> bytes:
+    settings = get_settings()
+    secret = settings.bitrix_bot_token or settings.bitrix_webhook_url or settings.yandex_cloud_api_key
+    if not secret:
+        secret = "dev-download-secret"
+    return secret.encode("utf-8")
 
 
 def _extract_event_auth(payload: dict[str, Any]) -> dict[str, Any]:

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import logging
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -351,6 +353,10 @@ class BitrixChatAdapter:
             return
 
         if result.instruction_docx_path and Path(result.instruction_docx_path).exists():
+            download_url = self._build_instruction_download_url(result)
+            if download_url:
+                await self.send_message(dialog_id, f"{summary}\n\nСкачать DOCX: {download_url}")
+                return
             try:
                 await self.upload_file(dialog_id, result.instruction_docx_path, summary)
             except BitrixAPIError as exc:
@@ -366,6 +372,26 @@ class BitrixChatAdapter:
 
     async def send_error(self, dialog_id: str, error: str) -> None:
         await self.send_message(dialog_id, f"Не удалось обработать договор.\n{error}")
+
+    def _build_instruction_download_url(self, result: ProcessingResult) -> str | None:
+        if not self.settings.public_base_url or not result.instruction_docx_path:
+            return None
+        filename = Path(result.instruction_docx_path).name
+        token = self._build_download_token(result.document_id, filename)
+        return (
+            f"{self.settings.public_base_url.rstrip('/')}/api/bitrix/bot/download/"
+            f"{quote(result.document_id)}/{quote(filename)}?token={token}"
+        )
+
+    def _build_download_token(self, document_id: str, filename: str) -> str:
+        secret = (
+            self.settings.bitrix_bot_token
+            or self.settings.bitrix_webhook_url
+            or self.settings.yandex_cloud_api_key
+            or "dev-download-secret"
+        ).encode("utf-8")
+        payload = f"{document_id}:{filename}".encode("utf-8")
+        return hmac.new(secret, payload, hashlib.sha256).hexdigest()
 
 
 def format_processing_result_message(result: ProcessingResult) -> str:
