@@ -39,7 +39,8 @@ async def receive_bitrix_bot_event(request: Request, background_tasks: Backgroun
 
 
 async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
-    adapter = _build_bitrix_adapter(payload)
+    bot_adapter = BitrixChatAdapter()
+    file_adapter = _build_bitrix_file_adapter(payload)
     event = _get_str(payload, "event") or _get_str(payload, "EVENT_NAME")
     data = _get_dict(payload, "data")
     if not data:
@@ -77,7 +78,7 @@ async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
         bool(text),
     )
     if event in {"ONIMBOTV2JOINCHAT", "ONIMBOTJOINCHAT"} or text.lower() in {"/start", "/help", "help"}:
-        await adapter.send_message(
+        await bot_adapter.send_message(
             dialog_id,
             "Отправьте PDF, DOCX или DOC договор в этот чат. Я обработаю файл через ContractPipeline "
             "и верну готовую инструкцию DOCX. Если данных не хватит, инструкция будет помечена "
@@ -91,7 +92,7 @@ async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
     if supported_file is None:
         if files:
             names = ", ".join(_extract_filename(file) for file in files[:3])
-            await adapter.send_message(
+            await bot_adapter.send_message(
                 dialog_id,
                 "Формат файла не поддерживается. Пришлите договор в PDF, DOCX или DOC.\n"
                 f"Получено: {names}\n"
@@ -101,13 +102,13 @@ async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
             return
         if not text:
             return
-        await adapter.send_message(dialog_id, "Пришлите договор файлом в формате PDF, DOCX или DOC.")
+        await bot_adapter.send_message(dialog_id, "Пришлите договор файлом в формате PDF, DOCX или DOC.")
         return
 
     file_id = _extract_file_id(supported_file)
     filename = _extract_filename(supported_file)
     if not file_id:
-        await adapter.send_error(dialog_id, "Не удалось получить fileId из события Bitrix.")
+        await bot_adapter.send_error(dialog_id, "Не удалось получить fileId из события Bitrix.")
         return
 
     external_user_id = (
@@ -116,14 +117,14 @@ async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
         or _get_str(message, "fromUserId")
         or "bitrix-user"
     )
-    await adapter.send_processing_status(dialog_id, f"Файл получен: {filename}\nСкачиваю из Bitrix24.")
+    await bot_adapter.send_processing_status(dialog_id, f"Файл получен: {filename}\nСкачиваю из Bitrix24.")
 
     with tempfile.TemporaryDirectory(prefix="bitrix_contract_") as tmp_dir:
         local_path = Path(tmp_dir) / FileStorage.safe_filename(filename)
         try:
-            await adapter.download_file(file_id, local_path, supported_file)
+            await file_adapter.download_file(file_id, local_path, supported_file)
             local_path, filename = _ensure_supported_download_name(local_path, filename)
-            await adapter.send_processing_status(dialog_id, "Файл скачан. Запускаю обработку договора.")
+            await bot_adapter.send_processing_status(dialog_id, "Файл скачан. Запускаю обработку договора.")
             result = await _get_pipeline().process_contract(
                 file_path=str(local_path),
                 original_filename=filename,
@@ -132,12 +133,12 @@ async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
                 external_entity_id=dialog_id,
             )
             if result.human_review_required:
-                await adapter.send_message(dialog_id, "Инструкция требует проверки человеком.")
-            await adapter.send_instruction_result(dialog_id, result)
+                await bot_adapter.send_message(dialog_id, "Инструкция требует проверки человеком.")
+            await bot_adapter.send_instruction_result(dialog_id, result)
         except Exception as exc:
             logger.exception("Bitrix chat document processing failed dialog_id=%s file_id=%s", dialog_id, file_id)
             try:
-                await adapter.send_error(dialog_id, str(exc))
+                await bot_adapter.send_error(dialog_id, str(exc))
             except BitrixAPIError:
                 logger.exception("Could not send Bitrix error message")
 
@@ -149,7 +150,7 @@ def _get_pipeline() -> ContractPipeline:
     return _pipeline
 
 
-def _build_bitrix_adapter(payload: dict[str, Any]) -> BitrixChatAdapter:
+def _build_bitrix_file_adapter(payload: dict[str, Any]) -> BitrixChatAdapter:
     auth = _extract_event_auth(payload)
     if auth:
         access_token = _get_str(auth, "access_token")

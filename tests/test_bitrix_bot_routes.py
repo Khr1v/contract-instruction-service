@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.api.bitrix_bot_routes import (
-    _build_bitrix_adapter,
+    _build_bitrix_file_adapter,
     _extract_dialog_id,
     _extract_event_auth,
     _extract_files,
@@ -76,7 +76,7 @@ def test_legacy_bitrix_payload_extracts_bot_event_auth() -> None:
 
 
 def test_bitrix_adapter_uses_event_oauth_endpoint() -> None:
-    adapter = _build_bitrix_adapter(
+    adapter = _build_bitrix_file_adapter(
         {
             "data": {
                 "BOT": {
