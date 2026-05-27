@@ -8,6 +8,7 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, BackgroundTasks, Request
 
+from app.config import get_settings
 from app.integrations.bitrix_chat_adapter import BitrixAPIError, BitrixChatAdapter
 from app.services.contract_pipeline import ContractPipeline
 from app.services.file_storage import FileStorage
@@ -38,7 +39,7 @@ async def receive_bitrix_bot_event(request: Request, background_tasks: Backgroun
 
 
 async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
-    adapter = BitrixChatAdapter()
+    adapter = _build_bitrix_adapter(payload)
     event = _get_str(payload, "event") or _get_str(payload, "EVENT_NAME")
     data = _get_dict(payload, "data")
     if not data:
@@ -87,9 +88,16 @@ async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
     files = _extract_files(message)
     logger.info("Bitrix bot files detected event=%s dialog_id=%s file_count=%s", event, dialog_id, len(files))
     supported_file = next((file for file in files if is_supported_document(_extract_filename(file))), None)
-    if supported_file is None and files:
-        supported_file = files[0]
     if supported_file is None:
+        if files:
+            names = ", ".join(_extract_filename(file) for file in files[:3])
+            await adapter.send_message(
+                dialog_id,
+                "Формат файла не поддерживается. Пришлите договор в PDF или DOCX.\n"
+                f"Получено: {names}\n"
+                "Если это старый Word .doc, откройте его в Word/LibreOffice и сохраните как .docx или PDF.",
+            )
+            return
         if not text:
             return
         await adapter.send_message(dialog_id, "Пришлите договор файлом в формате PDF или DOCX.")
@@ -112,7 +120,7 @@ async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
     with tempfile.TemporaryDirectory(prefix="bitrix_contract_") as tmp_dir:
         local_path = Path(tmp_dir) / FileStorage.safe_filename(filename)
         try:
-            await adapter.download_file(file_id, local_path)
+            await adapter.download_file(file_id, local_path, supported_file)
             local_path, filename = _ensure_supported_download_name(local_path, filename)
             await adapter.send_processing_status(dialog_id, "Файл скачан. Запускаю обработку договора.")
             result = await _get_pipeline().process_contract(
@@ -138,6 +146,41 @@ def _get_pipeline() -> ContractPipeline:
     if _pipeline is None:
         _pipeline = ContractPipeline()
     return _pipeline
+
+
+def _build_bitrix_adapter(payload: dict[str, Any]) -> BitrixChatAdapter:
+    auth = _extract_event_auth(payload)
+    if auth:
+        access_token = _get_str(auth, "access_token")
+        client_endpoint = _get_str(auth, "client_endpoint")
+        if access_token and client_endpoint:
+            return BitrixChatAdapter(
+                get_settings(),
+                rest_base_url=client_endpoint,
+                access_token=access_token,
+            )
+    return BitrixChatAdapter()
+
+
+def _extract_event_auth(payload: dict[str, Any]) -> dict[str, Any]:
+    data = _get_dict(payload, "data")
+    bot = _get_dict(data, "bot")
+    settings = get_settings()
+    bot_auth_candidates: list[dict[str, Any]] = []
+    if bot:
+        if settings.bitrix_bot_id is not None:
+            bot_auth_candidates.append(_get_dict(bot, str(settings.bitrix_bot_id)))
+        bot_auth_candidates.extend(value for value in bot.values() if isinstance(value, dict))
+
+    for candidate in bot_auth_candidates:
+        auth = _get_dict(candidate, "auth")
+        if auth:
+            return auth
+        if _get_str(candidate, "access_token") and _get_str(candidate, "client_endpoint"):
+            return candidate
+
+    auth = _get_dict(payload, "auth") or _get_dict(data, "auth")
+    return auth
 
 
 async def _read_event_payload(request: Request) -> dict[str, Any]:

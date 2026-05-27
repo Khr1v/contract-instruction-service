@@ -25,11 +25,21 @@ class BitrixChatAdapter:
     sends status messages, downloads incoming files, and uploads generated DOCX.
     """
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        rest_base_url: str | None = None,
+        access_token: str | None = None,
+    ) -> None:
         self.settings = settings or get_settings()
+        self._rest_base_url_override = rest_base_url.rstrip("/") if rest_base_url else None
+        self._access_token = access_token
 
     @property
     def _rest_base_url(self) -> str:
+        if self._rest_base_url_override:
+            return self._rest_base_url_override
         if not self.settings.bitrix_webhook_url:
             raise BitrixAPIError("BITRIX_WEBHOOK_URL is not configured")
         return self.settings.bitrix_webhook_url.rstrip("/")
@@ -48,6 +58,8 @@ class BitrixChatAdapter:
 
     async def call_method(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"{self._rest_base_url}/{method}"
+        if self._access_token and "auth" not in payload:
+            payload = {**payload, "auth": self._access_token}
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(url, json=payload)
         try:
@@ -109,18 +121,25 @@ class BitrixChatAdapter:
                 },
             )
 
-    async def download_file(self, file_id: str | int, target_path: Path) -> Path:
+    async def download_file(
+        self,
+        file_id: str | int,
+        target_path: Path,
+        file_payload: dict[str, Any] | None = None,
+    ) -> Path:
+        download_url = self._extract_download_url(file_payload or {})
         try:
-            data = await self.call_method(
-                "imbot.v2.File.download",
-                {
-                    "botId": self._bot_id,
-                    "botToken": self._bot_token,
-                    "fileId": int(file_id),
-                },
-            )
-            result = data.get("result") if isinstance(data.get("result"), dict) else {}
-            download_url = result.get("downloadUrl")
+            if not download_url:
+                data = await self.call_method(
+                    "imbot.v2.File.download",
+                    {
+                        "botId": self._bot_id,
+                        "botToken": self._bot_token,
+                        "fileId": int(file_id),
+                    },
+                )
+                result = data.get("result") if isinstance(data.get("result"), dict) else {}
+                download_url = result.get("downloadUrl") or result.get("DOWNLOAD_URL")
         except BitrixAPIError as exc:
             logger.info("Bitrix v2 file download failed, trying disk.file.get: %s", exc)
             data = await self.call_method("disk.file.get", {"id": int(file_id)})
@@ -135,6 +154,19 @@ class BitrixChatAdapter:
             response.raise_for_status()
             target_path.write_bytes(response.content)
         return target_path
+
+    def _extract_download_url(self, payload: dict[str, Any]) -> str | None:
+        for key in ("urlDownload", "downloadUrl", "DOWNLOAD_URL", "url_download", "URL_DOWNLOAD"):
+            value = payload.get(key)
+            if value:
+                return self._absolute_portal_url(str(value))
+        links = payload.get("links") or payload.get("LINKS")
+        if isinstance(links, dict):
+            for key in ("download", "DOWNLOAD", "urlDownload", "downloadUrl"):
+                value = links.get(key)
+                if value:
+                    return self._absolute_portal_url(str(value))
+        return None
 
     async def upload_file(self, dialog_id: str, file_path: str | Path, message: str | None = None) -> dict[str, Any]:
         path = Path(file_path)

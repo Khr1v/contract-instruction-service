@@ -4,7 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from app.api.bitrix_bot_routes import _extract_dialog_id, _extract_files, _get_str, _insert_nested_form_value
+from app.api.bitrix_bot_routes import (
+    _build_bitrix_adapter,
+    _extract_dialog_id,
+    _extract_event_auth,
+    _extract_files,
+    _get_str,
+    _insert_nested_form_value,
+)
 from app.config import Settings
 from app.integrations.bitrix_chat_adapter import BitrixChatAdapter
 
@@ -51,6 +58,40 @@ def test_legacy_bitrix_payload_extracts_dialog_and_message() -> None:
     assert _extract_dialog_id(params, {}) == "1812"
     assert _get_str(params, "message") == "/help"
     assert _get_str(params, "messageId") == "42"
+
+
+def test_legacy_bitrix_payload_extracts_bot_event_auth() -> None:
+    payload: dict[str, object] = {}
+    for key, value in {
+        "event": "ONIMBOTMESSAGEADD",
+        "data[BOT][1812][AUTH][access_token]": "event-token",
+        "data[BOT][1812][AUTH][client_endpoint]": "https://b24.example.ru/rest/",
+    }.items():
+        _insert_nested_form_value(payload, key, value)
+
+    auth = _extract_event_auth(payload)
+
+    assert auth["access_token"] == "event-token"
+    assert auth["client_endpoint"] == "https://b24.example.ru/rest/"
+
+
+def test_bitrix_adapter_uses_event_oauth_endpoint() -> None:
+    adapter = _build_bitrix_adapter(
+        {
+            "data": {
+                "BOT": {
+                    "1812": {
+                        "AUTH": {
+                            "access_token": "event-token",
+                            "client_endpoint": "https://b24.example.ru/rest/",
+                        }
+                    }
+                }
+            }
+        }
+    )
+
+    assert adapter._rest_base_url == "https://b24.example.ru/rest"
 
 
 def test_bitrix_adapter_builds_absolute_portal_url() -> None:
