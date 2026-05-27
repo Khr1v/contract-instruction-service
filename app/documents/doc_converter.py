@@ -27,25 +27,33 @@ class LegacyDocConverter:
             )
 
         output_dir = Path(tempfile.mkdtemp(prefix="contract_doc_convert_"))
-        command = [
-            self.executable,
-            "--headless",
-            "--convert-to",
-            "docx",
-            "--outdir",
-            str(output_dir),
-            str(source),
-        ]
-        try:
-            completed = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
-        except subprocess.TimeoutExpired as exc:
-            raise DocumentConversionError("Конвертация .doc в .docx превысила лимит времени.") from exc
-
         converted = output_dir / f"{source.stem}.docx"
-        if completed.returncode != 0 or not converted.exists():
+        completed: subprocess.CompletedProcess[str] | None = None
+        for convert_to in ('docx:"Office Open XML Text"', "docx"):
+            command = [
+                self.executable,
+                "--headless",
+                "--convert-to",
+                convert_to,
+                "--outdir",
+                str(output_dir),
+                str(source),
+            ]
+            try:
+                completed = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
+            except subprocess.TimeoutExpired as exc:
+                raise DocumentConversionError("Конвертация .doc в .docx превысила лимит времени.") from exc
+            if completed.returncode == 0 and converted.exists():
+                return converted
+
+        details = ""
+        if completed is not None:
             details = (completed.stderr or completed.stdout or "").strip()
-            raise DocumentConversionError(f"Не удалось конвертировать .doc в .docx через LibreOffice. {details}")
-        return converted
+        raise DocumentConversionError(
+            "Не удалось конвертировать .doc в .docx через LibreOffice. "
+            "Проверьте, что на сервере установлен пакет libreoffice-writer. "
+            f"{details}"
+        )
 
     @staticmethod
     def _find_executable() -> str | None:
