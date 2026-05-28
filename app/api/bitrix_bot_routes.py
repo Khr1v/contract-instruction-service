@@ -58,7 +58,7 @@ async def receive_bitrix_bot_event(request: Request, background_tasks: Backgroun
 
 
 async def process_bitrix_bot_event(payload: dict[str, Any]) -> None:
-    bot_adapter = BitrixChatAdapter()
+    bot_adapter = _build_bitrix_bot_adapter(payload)
     file_adapter = _build_bitrix_file_adapter(payload)
     event = _get_str(payload, "event") or _get_str(payload, "EVENT_NAME")
     data = _get_dict(payload, "data")
@@ -183,6 +183,22 @@ def _build_bitrix_file_adapter(payload: dict[str, Any]) -> BitrixChatAdapter:
     return BitrixChatAdapter()
 
 
+def _build_bitrix_bot_adapter(payload: dict[str, Any]) -> BitrixChatAdapter:
+    auth = _extract_event_auth(payload)
+    bot_id = _extract_event_bot_id(payload)
+    if auth and bot_id is not None:
+        access_token = _get_str(auth, "access_token")
+        client_endpoint = _get_str(auth, "client_endpoint")
+        if access_token and client_endpoint:
+            return BitrixChatAdapter(
+                get_settings(),
+                rest_base_url=client_endpoint,
+                access_token=access_token,
+                bot_id=bot_id,
+            )
+    return BitrixChatAdapter()
+
+
 def _is_valid_download_token(document_id: str, filename: str, token: str) -> bool:
     expected = _build_download_token(document_id, filename)
     return hmac.compare_digest(expected, token)
@@ -221,6 +237,28 @@ def _extract_event_auth(payload: dict[str, Any]) -> dict[str, Any]:
 
     auth = _get_dict(payload, "auth") or _get_dict(data, "auth")
     return auth
+
+
+def _extract_event_bot_id(payload: dict[str, Any]) -> int | None:
+    data = _get_dict(payload, "data")
+    bot = _get_dict(data, "bot")
+    if bot:
+        settings = get_settings()
+        if settings.bitrix_bot_id is not None and _get_dict(bot, str(settings.bitrix_bot_id)):
+            return settings.bitrix_bot_id
+        for key in bot.keys():
+            try:
+                return int(key)
+            except (TypeError, ValueError):
+                continue
+    message = _get_dict(data, "message") or _get_dict(data, "params")
+    bot_id = _get_str(message, "botId") or _get_str(message, "BOT_ID")
+    if bot_id:
+        try:
+            return int(bot_id)
+        except ValueError:
+            return None
+    return get_settings().bitrix_bot_id
 
 
 async def _read_event_payload(request: Request) -> dict[str, Any]:

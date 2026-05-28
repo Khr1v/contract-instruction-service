@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.api.bitrix_bot_routes import (
+    _build_bitrix_bot_adapter,
     _build_bitrix_file_adapter,
     _extract_dialog_id,
     _extract_event_auth,
@@ -95,6 +96,26 @@ def test_bitrix_adapter_uses_event_oauth_endpoint() -> None:
     assert adapter._rest_base_url == "https://b24.example.ru/rest"
 
 
+def test_bitrix_bot_adapter_uses_event_bot_id_and_oauth_endpoint() -> None:
+    adapter = _build_bitrix_bot_adapter(
+        {
+            "data": {
+                "BOT": {
+                    "1812": {
+                        "AUTH": {
+                            "access_token": "event-token",
+                            "client_endpoint": "https://b24.example.ru/rest/",
+                        }
+                    }
+                }
+            }
+        }
+    )
+
+    assert adapter._rest_base_url == "https://b24.example.ru/rest"
+    assert adapter._bot_id == 1812
+
+
 def test_bitrix_adapter_builds_absolute_portal_url() -> None:
     adapter = BitrixChatAdapter(
         Settings(
@@ -151,8 +172,6 @@ class FakeResultFolderBitrixChatAdapter(BitrixChatAdapter):
 
     async def call_method(self, method: str, payload: dict[str, object]) -> dict[str, object]:
         self.calls.append((method, payload))
-        if method == "imbot.v2.Chat.Message.send":
-            raise BitrixAPIError("v2 is not available in boxed test")
         if method == "imbot.message.add":
             return {"result": 123}
         if method == "disk.folder.uploadfile":
@@ -202,9 +221,8 @@ async def test_send_instruction_result_uses_result_folder_link(tmp_path: Path) -
 
     assert [method for method, _ in adapter.calls] == [
         "disk.folder.uploadfile",
-        "imbot.v2.Chat.Message.send",
         "imbot.message.add",
     ]
     assert adapter.calls[0][1]["id"] == 900
-    message = str(adapter.calls[2][1]["MESSAGE"])
+    message = str(adapter.calls[1][1]["MESSAGE"])
     assert "DOCX в общей папке: https://b24.example.ru/docs/path/instruction.docx" in message

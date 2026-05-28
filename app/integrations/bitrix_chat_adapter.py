@@ -31,10 +31,14 @@ class BitrixChatAdapter:
         *,
         rest_base_url: str | None = None,
         access_token: str | None = None,
+        bot_id: int | None = None,
+        bot_token: str | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self._rest_base_url_override = rest_base_url.rstrip("/") if rest_base_url else None
         self._access_token = access_token
+        self._bot_id_override = bot_id
+        self._bot_token_override = bot_token
 
     @property
     def _rest_base_url(self) -> str:
@@ -46,14 +50,18 @@ class BitrixChatAdapter:
 
     @property
     def _bot_id(self) -> int:
+        if self._bot_id_override is not None:
+            return self._bot_id_override
         if self.settings.bitrix_bot_id is None:
             raise BitrixAPIError("BITRIX_BOT_ID is not configured")
         return self.settings.bitrix_bot_id
 
     @property
-    def _bot_token(self) -> str:
+    def _bot_token(self) -> str | None:
+        if self._bot_token_override is not None:
+            return self._bot_token_override
         if not self.settings.bitrix_bot_token:
-            raise BitrixAPIError("BITRIX_BOT_TOKEN is not configured")
+            return None
         return self.settings.bitrix_bot_token
 
     async def call_method(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -74,52 +82,34 @@ class BitrixChatAdapter:
 
     async def register_bot(self, event_url: str) -> dict[str, Any]:
         payload = {
-            "fields": {
-                "code": self.settings.bitrix_bot_code,
-                "botToken": self._bot_token,
-                "properties": {
-                    "name": self.settings.bitrix_bot_name,
-                    "workPosition": "Генератор инструкций по договорам",
-                },
-                "type": self.settings.bitrix_bot_type,
-                "eventMode": "webhook",
-                "webhookUrl": event_url,
-                "isHidden": False,
-                "isReactionsEnabled": True,
-            }
+            "CODE": self.settings.bitrix_bot_code,
+            "TYPE": "B",
+            "EVENT_HANDLER": event_url,
+            "OPENLINE": "N",
+            "PROPERTIES": {
+                "NAME": self.settings.bitrix_bot_name,
+                "WORK_POSITION": "Генератор инструкций по договорам",
+                "COLOR": "GREEN",
+            },
         }
-        return await self.call_method("imbot.v2.Bot.register", payload)
+        if self._bot_token:
+            payload["CLIENT_ID"] = self._bot_token
+        return await self.call_method("imbot.register", payload)
 
     async def send_processing_status(self, dialog_id: str, status: str) -> None:
         await self.send_message(dialog_id, status)
 
     async def send_message(self, dialog_id: str, message: str) -> None:
-        try:
-            await self.call_method(
-                "imbot.v2.Chat.Message.send",
-                {
-                    "botId": self._bot_id,
-                    "botToken": self._bot_token,
-                    "dialogId": dialog_id,
-                    "fields": {
-                        "message": message[:19_500],
-                        "urlPreview": False,
-                    },
-                },
-            )
-        except BitrixAPIError as exc:
-            logger.info("Bitrix v2 message send failed, trying legacy imbot.message.add: %s", exc)
-            await self.call_method(
-                "imbot.message.add",
-                {
-                    "BOT_ID": self._bot_id,
-                    "CLIENT_ID": self._bot_token,
-                    "DIALOG_ID": dialog_id,
-                    "MESSAGE": message[:19_500],
-                    "SYSTEM": "N",
-                    "URL_PREVIEW": "N",
-                },
-            )
+        payload: dict[str, Any] = {
+            "BOT_ID": self._bot_id,
+            "DIALOG_ID": dialog_id,
+            "MESSAGE": message[:19_500],
+            "SYSTEM": "N",
+            "URL_PREVIEW": "N",
+        }
+        if self._bot_token:
+            payload["CLIENT_ID"] = self._bot_token
+        await self.call_method("imbot.message.add", payload)
 
     async def download_file(
         self,
@@ -128,20 +118,7 @@ class BitrixChatAdapter:
         file_payload: dict[str, Any] | None = None,
     ) -> Path:
         download_url = self._extract_download_url(file_payload or {})
-        try:
-            if not download_url:
-                data = await self.call_method(
-                    "imbot.v2.File.download",
-                    {
-                        "botId": self._bot_id,
-                        "botToken": self._bot_token,
-                        "fileId": int(file_id),
-                    },
-                )
-                result = data.get("result") if isinstance(data.get("result"), dict) else {}
-                download_url = result.get("downloadUrl") or result.get("DOWNLOAD_URL")
-        except BitrixAPIError as exc:
-            logger.info("Bitrix v2 file download failed, trying disk.file.get: %s", exc)
+        if not download_url:
             data = await self.call_method("disk.file.get", {"id": int(file_id)})
             result = data.get("result") if isinstance(data.get("result"), dict) else {}
             download_url = result.get("DOWNLOAD_URL") or result.get("downloadUrl")
@@ -170,35 +147,7 @@ class BitrixChatAdapter:
 
     async def upload_file(self, dialog_id: str, file_path: str | Path, message: str | None = None) -> dict[str, Any]:
         path = Path(file_path)
-        content = base64.b64encode(path.read_bytes()).decode("ascii")
-        fields = {
-            "name": path.name,
-            "content": content,
-            "message": message or "",
-        }
-        try:
-            return await self.call_method(
-                "imbot.v2.File.upload",
-                {
-                    "botId": self._bot_id,
-                    "botToken": self._bot_token,
-                    "dialogId": dialog_id,
-                    "fields": fields,
-                },
-            )
-        except BitrixAPIError as exc:
-            logger.info("Bitrix v2 bot file upload failed, trying im.v2.File.upload: %s", exc)
-            try:
-                return await self.call_method(
-                    "im.v2.File.upload",
-                    {
-                        "dialogId": dialog_id,
-                        "fields": fields,
-                    },
-                )
-            except BitrixAPIError as legacy_exc:
-                logger.info("Bitrix im.v2 file upload failed, trying disk upload + chat commit: %s", legacy_exc)
-                return await self.upload_file_via_disk(dialog_id, path, message)
+        return await self.upload_file_via_disk(dialog_id, path, message)
 
     async def upload_file_via_disk(
         self,

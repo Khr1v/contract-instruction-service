@@ -71,6 +71,8 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, alias="API_PORT")
 
     public_base_url: str | None = Field(default=None, alias="PUBLIC_BASE_URL")
+    bitrix_client_id: str | None = Field(default=None, alias="BITRIX_CLIENT_ID")
+    bitrix_client_secret: str | None = Field(default=None, alias="BITRIX_CLIENT_SECRET")
     bitrix_webhook_url: str | None = Field(default=None, alias="BITRIX_WEBHOOK_URL")
     bitrix_bot_id: int | None = Field(default=None, alias="BITRIX_BOT_ID")
     bitrix_bot_code: str = Field(default="contract_instruction_bot", alias="BITRIX_BOT_CODE")

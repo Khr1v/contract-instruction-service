@@ -56,3 +56,26 @@ class ProcessingResultRecord(Base):
 
     document: Mapped[DocumentRecord] = relationship(back_populates="result")
 
+
+class BitrixAppInstallationRecord(Base):
+    __tablename__ = "bitrix_app_installations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    domain: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    member_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    access_token: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    application_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    client_endpoint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    server_endpoint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bot_id: Mapped[int | None] = mapped_column(nullable=True)
+    bot_code: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    bot_client_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )

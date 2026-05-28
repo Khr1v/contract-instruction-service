@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from app.db.database import Database
-from app.db.models import DocumentRecord, ProcessingResultRecord
+from app.db.models import BitrixAppInstallationRecord, DocumentRecord, ProcessingResultRecord
 
 
 class DocumentRepository:
@@ -81,3 +83,77 @@ class DocumentRepository:
             session.refresh(existing)
             return existing
 
+
+class BitrixAppInstallationRepository:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def upsert_installation(
+        self,
+        *,
+        domain: str,
+        member_id: str | None,
+        access_token: str,
+        refresh_token: str | None,
+        expires_at: datetime | None,
+        application_token: str | None,
+        client_endpoint: str | None,
+        server_endpoint: str | None,
+    ) -> BitrixAppInstallationRecord:
+        with self.database.session() as session:
+            query = session.query(BitrixAppInstallationRecord).filter(BitrixAppInstallationRecord.domain == domain)
+            record = query.one_or_none()
+            if record is None and member_id:
+                record = (
+                    session.query(BitrixAppInstallationRecord)
+                    .filter(BitrixAppInstallationRecord.member_id == member_id)
+                    .one_or_none()
+                )
+            if record is None:
+                record = BitrixAppInstallationRecord(domain=domain)
+                session.add(record)
+
+            record.domain = domain
+            record.member_id = member_id
+            record.access_token = access_token
+            record.refresh_token = refresh_token
+            record.expires_at = expires_at
+            record.application_token = application_token
+            record.client_endpoint = client_endpoint
+            record.server_endpoint = server_endpoint
+            session.commit()
+            session.refresh(record)
+            return record
+
+    def save_bot_state(
+        self,
+        *,
+        installation_id: str,
+        bot_id: int,
+        bot_code: str,
+        bot_client_id: str | None,
+    ) -> None:
+        with self.database.session() as session:
+            record = session.get(BitrixAppInstallationRecord, installation_id)
+            if record is None:
+                raise ValueError(f"Bitrix installation not found: {installation_id}")
+            record.bot_id = bot_id
+            record.bot_code = bot_code
+            record.bot_client_id = bot_client_id
+            session.commit()
+
+    def get_by_domain(self, domain: str) -> BitrixAppInstallationRecord | None:
+        with self.database.session() as session:
+            return (
+                session.query(BitrixAppInstallationRecord)
+                .filter(BitrixAppInstallationRecord.domain == domain)
+                .one_or_none()
+            )
+
+    def get_latest(self) -> BitrixAppInstallationRecord | None:
+        with self.database.session() as session:
+            return (
+                session.query(BitrixAppInstallationRecord)
+                .order_by(BitrixAppInstallationRecord.updated_at.desc())
+                .first()
+            )

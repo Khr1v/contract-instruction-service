@@ -22,8 +22,11 @@ async def main() -> None:
         event_url = f"{settings.public_base_url.rstrip('/')}/api/bitrix/bot/events"
 
     result = await BitrixChatAdapter(settings).register_bot(event_url)
-    bot = result.get("result", {}).get("bot", {}) if isinstance(result.get("result"), dict) else {}
-    bot_id = bot.get("id")
+    payload = result.get("result")
+    if isinstance(payload, dict):
+        bot_id = payload.get("ID") or payload.get("id") or payload.get("BOT_ID")
+    else:
+        bot_id = payload
     print("Bitrix bot registered.")
     print(f"Event URL: {event_url}")
     if bot_id:
