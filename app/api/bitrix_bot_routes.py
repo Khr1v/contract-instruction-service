@@ -12,6 +12,8 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from app.config import get_settings
+from app.db.database import Database
+from app.db.repository import BitrixAppInstallationRepository
 from app.integrations.bitrix_chat_adapter import BitrixAPIError, BitrixChatAdapter
 from app.services.contract_pipeline import ContractPipeline
 from app.services.file_storage import FileStorage
@@ -258,7 +260,17 @@ def _extract_event_bot_id(payload: dict[str, Any]) -> int | None:
             return int(bot_id)
         except ValueError:
             return None
-    return get_settings().bitrix_bot_id
+    settings = get_settings()
+    try:
+        database = Database(settings)
+        database.init_db()
+        latest = BitrixAppInstallationRepository(database).get_latest()
+    except Exception:
+        logger.exception("Could not read latest Bitrix app bot_id from DB")
+        latest = None
+    if latest and latest.bot_id is not None:
+        return latest.bot_id
+    return settings.bitrix_bot_id
 
 
 async def _read_event_payload(request: Request) -> dict[str, Any]:
